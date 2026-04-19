@@ -1,4 +1,5 @@
 import html
+import hashlib
 import json
 import os
 import re
@@ -159,6 +160,15 @@ def safe_list(value, max_len: int = 5) -> List[str]:
     if not isinstance(value, list):
         value = [str(value)]
     return dedupe_keep_order(value)[:max_len]
+
+def make_cache_key(title: str, body: str, category: str, goal: str) -> str:
+    normalized = "|||".join([
+        title.strip(),
+        body.strip(),
+        category.strip(),
+        goal.strip(),
+    ])
+    return hashlib.md5(normalized.encode("utf-8")).hexdigest()
 
 def render_copy_button(text: str, label: str, key: str):
     safe_text = json.dumps(text)
@@ -381,7 +391,7 @@ def call_deepseek_analysis(
 目标：{goal}
 
 【评估维度】
-请分别给出 0-100 分：
+请分别给出 0-100 分的整数：
 1. hook_strength：首屏吸引力 / 标题抓力
 2. authenticity：真实感 / 原生感
 3. information_density：信息价值 / 具体程度
@@ -393,6 +403,7 @@ def call_deepseek_analysis(
 - 重点扣分：明显广告腔、夸张空泛、缺少细节、像硬广不像笔记
 - 建议要务实，像产品中的内容诊断结果
 - strengths、risks、suggestions 尽量避免语义重复，每项都要有明显区分
+- 对于相同输入，请尽量保持评分稳定，不要因为措辞偏好产生过大波动
 - 请结合下方启发式信号参考，但不要机械重复
 
 【改写要求】
@@ -427,7 +438,7 @@ def call_deepseek_analysis(
             {"role": "user", "content": user_prompt},
         ],
         response_format={"type": "json_object"},
-        temperature=0.4,
+        temperature=0.0,
         max_tokens=1400,
     )
 
@@ -571,7 +582,7 @@ with st.sidebar:
 
     st.markdown("**建议体验路径**")
     st.markdown("- 输入一篇较强笔记，查看内容优势")
-    st.markdown("- 输入一篇偏广告笔记，查看风险识别")
+    st.markdown("- 输入一篇广告感较强的笔记，查看风险识别")
     st.markdown("- 对比原文与改写版本，观察优化方向")
 
     st.markdown("**核心输出**")
@@ -600,6 +611,8 @@ if "goal_input" not in st.session_state:
     st.session_state.goal_input = GOAL_OPTIONS[0]
 if "analysis_result" not in st.session_state:
     st.session_state.analysis_result = None
+if "analysis_cache" not in st.session_state:
+    st.session_state.analysis_cache = {}
 
 # =========================
 # Input Area
@@ -657,62 +670,71 @@ if run:
     elif not DEEPSEEK_API_KEY:
         st.error("没有检测到 API Key。请先配置 DEEPSEEK_API_KEY。")
     else:
-        with st.spinner("正在生成内容诊断与改写方向..."):
-            try:
-                client = get_client()
+        cache_key = make_cache_key(title, body, category, goal)
 
-                original_heuristics = heuristic_signals(title, body, category)
-                original_llm = call_deepseek_analysis(
-                    client=client,
-                    title=title,
-                    body=body,
-                    category=category,
-                    goal=goal,
-                    heuristics=original_heuristics,
-                    include_rewrite=True,
-                )
-                original_result = blend_result(original_llm, original_heuristics)
+        if cache_key in st.session_state.analysis_cache:
+            st.session_state.analysis_result = st.session_state.analysis_cache[cache_key]
+            st.info("已复用相同输入的历史分析结果，以保持评分稳定。")
+        else:
+            with st.spinner("正在生成内容诊断与改写方向..."):
+                try:
+                    client = get_client()
 
-                rewrite_title = original_result["rewrite_title"]
-                rewrite_caption = original_result["rewrite_caption"]
+                    original_heuristics = heuristic_signals(title, body, category)
+                    original_llm = call_deepseek_analysis(
+                        client=client,
+                        title=title,
+                        body=body,
+                        category=category,
+                        goal=goal,
+                        heuristics=original_heuristics,
+                        include_rewrite=True,
+                    )
+                    original_result = blend_result(original_llm, original_heuristics)
 
-                rewritten_heuristics = heuristic_signals(rewrite_title, rewrite_caption, category)
-                rewritten_llm = call_deepseek_analysis(
-                    client=client,
-                    title=rewrite_title,
-                    body=rewrite_caption,
-                    category=category,
-                    goal=goal,
-                    heuristics=rewritten_heuristics,
-                    include_rewrite=False,
-                )
-                rewritten_result = blend_result(rewritten_llm, rewritten_heuristics)
+                    rewrite_title = original_result["rewrite_title"]
+                    rewrite_caption = original_result["rewrite_caption"]
 
-                score_diff = compare_scores(original_result, rewritten_result)
-                publish_label, publish_bg, publish_fg = get_publish_decision(original_result)
-                rewritten_publish_label, rewritten_publish_bg, rewritten_publish_fg = get_publish_decision(rewritten_result)
+                    rewritten_heuristics = heuristic_signals(rewrite_title, rewrite_caption, category)
+                    rewritten_llm = call_deepseek_analysis(
+                        client=client,
+                        title=rewrite_title,
+                        body=rewrite_caption,
+                        category=category,
+                        goal=goal,
+                        heuristics=rewritten_heuristics,
+                        include_rewrite=False,
+                    )
+                    rewritten_result = blend_result(rewritten_llm, rewritten_heuristics)
 
-                rewrite_status, rewrite_feedback = get_rewrite_feedback(score_diff["overall_score"])
+                    score_diff = compare_scores(original_result, rewritten_result)
+                    publish_label, publish_bg, publish_fg = get_publish_decision(original_result)
+                    rewritten_publish_label, rewritten_publish_bg, rewritten_publish_fg = get_publish_decision(rewritten_result)
 
-                st.session_state.analysis_result = {
-                    "category": category,
-                    "goal": goal,
-                    "original_title": title,
-                    "original_body": body,
-                    "original_result": original_result,
-                    "rewritten_title": rewrite_title,
-                    "rewritten_body": rewrite_caption,
-                    "rewritten_result": rewritten_result,
-                    "score_diff": score_diff,
-                    "publish_decision": (publish_label, publish_bg, publish_fg),
-                    "rewritten_publish_decision": (rewritten_publish_label, rewritten_publish_bg, rewritten_publish_fg),
-                    "rewrite_status": rewrite_status,
-                    "rewrite_feedback": rewrite_feedback,
-                }
+                    rewrite_status, rewrite_feedback = get_rewrite_feedback(score_diff["overall_score"])
 
-            except Exception as e:
-                st.error(f"分析失败：{e}")
-                st.stop()
+                    result_bundle = {
+                        "category": category,
+                        "goal": goal,
+                        "original_title": title,
+                        "original_body": body,
+                        "original_result": original_result,
+                        "rewritten_title": rewrite_title,
+                        "rewritten_body": rewrite_caption,
+                        "rewritten_result": rewritten_result,
+                        "score_diff": score_diff,
+                        "publish_decision": (publish_label, publish_bg, publish_fg),
+                        "rewritten_publish_decision": (rewritten_publish_label, rewritten_publish_bg, rewritten_publish_fg),
+                        "rewrite_status": rewrite_status,
+                        "rewrite_feedback": rewrite_feedback,
+                    }
+
+                    st.session_state.analysis_result = result_bundle
+                    st.session_state.analysis_cache[cache_key] = result_bundle
+
+                except Exception as e:
+                    st.error(f"分析失败：{e}")
+                    st.stop()
 
 # =========================
 # Render Result
@@ -780,7 +802,7 @@ if result_bundle:
     else:
         st.info(rewrite_feedback)
 
-    title_label_col, title_btn_col = st.columns([8.8, 1.2], vertical_alignment="center")
+    title_label_col, title_btn_col = st.columns([8.8, 1.2])
     with title_label_col:
         st.markdown("**改写标题**")
     with title_btn_col:
@@ -791,7 +813,7 @@ if result_bundle:
 
     st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
 
-    body_label_col, body_btn_col = st.columns([8.8, 1.2], vertical_alignment="center")
+    body_label_col, body_btn_col = st.columns([8.8, 1.2])
     with body_label_col:
         st.markdown("**改写正文**")
     with body_btn_col:
