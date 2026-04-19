@@ -1,9 +1,11 @@
+import html
 import json
 import os
 import re
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
 import streamlit as st
+import streamlit.components.v1 as components
 from openai import OpenAI
 
 # =========================
@@ -16,18 +18,12 @@ st.set_page_config(
 )
 
 # =========================
-# Copy / Display Text
+# App Copy
 # =========================
 APP_TITLE = "📝 NoteScore AI"
 APP_SUBTITLE = "面向小红书内容场景的 AI 内容发布前诊断与优化 Demo"
 APP_DESC = "帮助创作者与品牌运营在发布前快速评估笔记质量、识别风险并生成优化版本。"
 APP_NOTE = "说明：本 Demo 基于内容质量信号进行分析，用于辅助内容优化，不代表平台真实推荐机制。"
-
-SUBMISSION_DESCRIPTION = (
-    "这是一个面向小红书内容场景的 AI 内容诊断 Demo。用户输入标题和正文后，"
-    "系统会从吸引力、真实感、信息价值、互动潜力和转化潜力五个维度进行分析，"
-    "并输出风险诊断、优化建议及改写版本，帮助创作者或品牌在发布前提升笔记质量与种草效率。"
-)
 
 st.title(APP_TITLE)
 st.caption(APP_SUBTITLE)
@@ -109,7 +105,7 @@ CONVERT_WORDS = [
 ]
 
 # =========================
-# Helper Functions
+# Helpers
 # =========================
 def clamp(value: float, low: int = 0, high: int = 100) -> int:
     return int(max(low, min(high, round(value))))
@@ -123,6 +119,94 @@ def dedupe_keep_order(items: List[str]) -> List[str]:
             seen.add(item)
             result.append(item)
     return result
+
+def safe_list(value, max_len: int = 5) -> List[str]:
+    if not isinstance(value, list):
+        value = [str(value)]
+    return dedupe_keep_order(value)[:max_len]
+
+def render_copy_button(text: str, label: str, key: str):
+    safe_text = json.dumps(text)
+
+    components.html(
+        f"""
+        <div style="
+            width: 100%;
+            display: flex;
+            justify-content: flex-end;
+            align-items: center;
+            padding-top: 2px;
+            padding-bottom: 6px;
+            box-sizing: border-box;
+        ">
+            <button id="copy-btn-{key}" style="
+                width: 108px;
+                height: 42px;
+                border-radius: 10px;
+                border: 1px solid #D0D5DD;
+                background: #FFFFFF;
+                color: #111827;
+                cursor: pointer;
+                font-size: 14px;
+                font-weight: 600;
+                white-space: nowrap;
+            ">
+                {label}
+            </button>
+        </div>
+
+        <script>
+        const btn = document.getElementById("copy-btn-{key}");
+        btn.onclick = async () => {{
+            try {{
+                await navigator.clipboard.writeText({safe_text});
+                const originalText = btn.innerText;
+                btn.innerText = "已复制";
+                btn.style.background = "#ECFDF3";
+                btn.style.border = "1px solid #A6F4C5";
+                btn.style.color = "#027A48";
+                setTimeout(() => {{
+                    btn.innerText = originalText;
+                    btn.style.background = "#FFFFFF";
+                    btn.style.border = "1px solid #D0D5DD";
+                    btn.style.color = "#111827";
+                }}, 1200);
+            }} catch (err) {{
+                btn.innerText = "复制失败";
+                setTimeout(() => {{
+                    btn.innerText = "{label}";
+                }}, 1200);
+            }}
+        }}
+        </script>
+        """,
+        height=58,
+    )
+
+def render_content_box(text: str, min_height: int = 0):
+    safe_text = html.escape(text).replace("\n", "<br>")
+
+    st.markdown(
+        f"""
+        <div style="
+            background: #FFFFFF;
+            border: 1px solid #E5E7EB;
+            border-radius: 14px;
+            padding: 16px 18px;
+            color: #111827;
+            font-size: 16px;
+            line-height: 1.75;
+            box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+            min-height: {min_height}px;
+            margin-bottom: 8px;
+            white-space: normal;
+            word-break: break-word;
+        ">
+            {safe_text}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 def heuristic_signals(title: str, body: str) -> Dict:
     text = f"{title}\n{body}"
@@ -207,14 +291,32 @@ def heuristic_signals(title: str, body: str) -> Dict:
         "adjustments": adjustments,
     }
 
-def call_deepseek(title: str, body: str, category: str, goal: str, heuristics: Dict) -> Dict:
+def get_client() -> OpenAI:
     if not DEEPSEEK_API_KEY:
         raise ValueError("未检测到 DEEPSEEK_API_KEY。请先在 .streamlit/secrets.toml 或环境变量中配置。")
-
-    client = OpenAI(
+    return OpenAI(
         api_key=DEEPSEEK_API_KEY,
         base_url="https://api.deepseek.com",
     )
+
+def call_deepseek_analysis(
+    client: OpenAI,
+    title: str,
+    body: str,
+    category: str,
+    goal: str,
+    heuristics: Dict,
+    include_rewrite: bool = True,
+) -> Dict:
+    rewrite_instruction = """
+- 需要输出 rewrite_title 和 rewrite_caption
+- 改写标题和改写正文必须是可直接展示给用户的最终版本
+- 不要出现“可补充”“可填写”“可提及”“可替换”“可写成”等占位符或备注语气
+- 不要用括号给作者留提醒，不要输出半成品草稿
+""" if include_rewrite else """
+- rewrite_title 返回空字符串
+- rewrite_caption 返回空字符串
+"""
 
     system_prompt = """
 你是一个面向小红书内容场景的AI内容评估助手。
@@ -245,7 +347,11 @@ def call_deepseek(title: str, body: str, category: str, goal: str, heuristics: D
 - 优先奖励：具体场景、真实体验、清晰结构、可收藏的信息、自然的互动触发
 - 重点扣分：明显广告腔、夸张空泛、缺少细节、像硬广不像笔记
 - 建议要务实，像产品中的内容诊断结果
+- strengths、risks、suggestions 尽量避免语义重复，每项都要有明显区分
 - 请结合下方启发式信号参考，但不要机械重复
+
+【改写要求】
+{rewrite_instruction}
 
 【启发式信号，仅供参考，不是最终结论】
 {json.dumps(heuristics, ensure_ascii=False)}
@@ -276,12 +382,11 @@ def call_deepseek(title: str, body: str, category: str, goal: str, heuristics: D
             {"role": "user", "content": user_prompt},
         ],
         response_format={"type": "json_object"},
-        temperature=0.7,
+        temperature=0.6,
         max_tokens=1200,
     )
 
     raw = (response.choices[0].message.content or "").strip()
-
     if not raw:
         raise ValueError("模型返回为空，请重试一次。")
 
@@ -320,11 +425,9 @@ def call_deepseek(title: str, body: str, category: str, goal: str, heuristics: D
             dims[key] = 60
     parsed["dimension_scores"] = dims
 
-    for key in ["strengths", "risks", "suggestions"]:
-        value = parsed.get(key, [])
-        if not isinstance(value, list):
-            value = [str(value)]
-        parsed[key] = dedupe_keep_order(value)
+    parsed["strengths"] = safe_list(parsed.get("strengths", []), 5)
+    parsed["risks"] = safe_list(parsed.get("risks", []), 5)
+    parsed["suggestions"] = safe_list(parsed.get("suggestions", []), 5)
 
     parsed["one_sentence_summary"] = str(parsed.get("one_sentence_summary", "")).strip()
     parsed["rewrite_title"] = str(parsed.get("rewrite_title", "")).strip()
@@ -356,6 +459,48 @@ def blend_result(llm_result: Dict, heuristics: Dict) -> Dict:
     )[:5]
     return result
 
+def get_publish_decision(result: Dict) -> Tuple[str, str, str]:
+    overall = result["overall_score"]
+    dims = result["dimension_scores"]
+    auth = dims["authenticity"]
+    info = dims["information_density"]
+    hook = dims["hook_strength"]
+
+    if overall >= 82 and auth >= 75 and info >= 65 and hook >= 70:
+        return "建议发布", "#e8f5e9", "#2e7d32"
+    elif overall >= 68:
+        return "建议修改后发布", "#fff8e1", "#b26a00"
+    else:
+        return "建议重写", "#ffebee", "#c62828"
+
+def render_decision(label: str, bg: str, fg: str):
+    st.markdown(
+        f"""
+        <div style="
+            background:{bg};
+            color:{fg};
+            padding:12px 16px;
+            border-radius:12px;
+            font-weight:700;
+            display:inline-block;
+            font-size:18px;
+            margin-top:4px;
+            margin-bottom:8px;
+        ">
+            {label}
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+def compare_scores(before: Dict, after: Dict) -> Dict:
+    keys = list(WEIGHTS.keys())
+    diff = {}
+    for key in keys:
+        diff[key] = after["dimension_scores"][key] - before["dimension_scores"][key]
+    diff["overall_score"] = after["overall_score"] - before["overall_score"]
+    return diff
+
 # =========================
 # Sidebar
 # =========================
@@ -373,18 +518,16 @@ with st.sidebar:
     st.markdown("- 风险诊断")
     st.markdown("- 优化建议")
     st.markdown("- 改写版本")
+    st.markdown("- 优化前后对比")
 
     st.markdown("---")
     if DEEPSEEK_API_KEY:
-        st.success("API 已连接")
+        st.success("分析服务可用")
     else:
-        st.warning("未检测到 API Key")
-
-    with st.expander("投递说明（200字内）"):
-        st.write(SUBMISSION_DESCRIPTION)
+        st.warning("分析服务不可用")
 
 # =========================
-# Session State Init
+# Session State
 # =========================
 if "title_input" not in st.session_state:
     st.session_state.title_input = ""
@@ -394,6 +537,8 @@ if "category_input" not in st.session_state:
     st.session_state.category_input = CATEGORY_OPTIONS[0]
 if "goal_input" not in st.session_state:
     st.session_state.goal_input = GOAL_OPTIONS[0]
+if "analysis_result" not in st.session_state:
+    st.session_state.analysis_result = None
 
 # =========================
 # Input Area
@@ -413,12 +558,14 @@ with col_ex1:
             st.session_state.body_input = EXAMPLES[example_name]["body"]
             st.session_state.category_input = EXAMPLES[example_name]["category"]
             st.session_state.goal_input = EXAMPLES[example_name]["goal"]
+            st.session_state.analysis_result = None
 with col_ex2:
     if st.button("清空内容"):
         st.session_state.title_input = ""
         st.session_state.body_input = ""
         st.session_state.category_input = CATEGORY_OPTIONS[0]
         st.session_state.goal_input = GOAL_OPTIONS[0]
+        st.session_state.analysis_result = None
 
 col1, col2 = st.columns(2)
 with col1:
@@ -441,7 +588,7 @@ body = st.text_area(
 run = st.button("生成内容诊断", type="primary")
 
 # =========================
-# Analysis
+# Run Analysis
 # =========================
 if run:
     if not title.strip() or not body.strip():
@@ -449,54 +596,173 @@ if run:
     elif not DEEPSEEK_API_KEY:
         st.error("没有检测到 API Key。请先配置 DEEPSEEK_API_KEY。")
     else:
-        heuristics = heuristic_signals(title, body)
-
-        with st.spinner("正在分析内容质量..."):
+        with st.spinner("正在生成内容诊断与优化版本..."):
             try:
-                llm_result = call_deepseek(title, body, category, goal, heuristics)
-                result = blend_result(llm_result, heuristics)
+                client = get_client()
+
+                original_heuristics = heuristic_signals(title, body)
+                original_llm = call_deepseek_analysis(
+                    client=client,
+                    title=title,
+                    body=body,
+                    category=category,
+                    goal=goal,
+                    heuristics=original_heuristics,
+                    include_rewrite=True,
+                )
+                original_result = blend_result(original_llm, original_heuristics)
+
+                rewrite_title = original_result["rewrite_title"]
+                rewrite_caption = original_result["rewrite_caption"]
+
+                optimized_heuristics = heuristic_signals(rewrite_title, rewrite_caption)
+                optimized_llm = call_deepseek_analysis(
+                    client=client,
+                    title=rewrite_title,
+                    body=rewrite_caption,
+                    category=category,
+                    goal=goal,
+                    heuristics=optimized_heuristics,
+                    include_rewrite=False,
+                )
+                optimized_result = blend_result(optimized_llm, optimized_heuristics)
+
+                score_diff = compare_scores(original_result, optimized_result)
+                publish_label, publish_bg, publish_fg = get_publish_decision(original_result)
+                optimized_publish_label, optimized_publish_bg, optimized_publish_fg = get_publish_decision(optimized_result)
+
+                st.session_state.analysis_result = {
+                    "category": category,
+                    "goal": goal,
+                    "original_title": title,
+                    "original_body": body,
+                    "original_result": original_result,
+                    "optimized_title": rewrite_title,
+                    "optimized_body": rewrite_caption,
+                    "optimized_result": optimized_result,
+                    "score_diff": score_diff,
+                    "publish_decision": (publish_label, publish_bg, publish_fg),
+                    "optimized_publish_decision": (optimized_publish_label, optimized_publish_bg, optimized_publish_fg),
+                }
+
             except Exception as e:
                 st.error(f"分析失败：{e}")
                 st.stop()
 
-        st.markdown("---")
-        st.subheader("2) 内容诊断结果")
+# =========================
+# Render Result
+# =========================
+result_bundle = st.session_state.analysis_result
 
-        c1, c2, c3 = st.columns(3)
-        c1.metric("综合评分", f"{result['overall_score']}/100")
-        c2.metric("内容品类", category)
-        c3.metric("优化目标", goal)
+if result_bundle:
+    category = result_bundle["category"]
+    goal = result_bundle["goal"]
+    original_result = result_bundle["original_result"]
+    optimized_result = result_bundle["optimized_result"]
+    score_diff = result_bundle["score_diff"]
+    publish_label, publish_bg, publish_fg = result_bundle["publish_decision"]
+    optimized_publish_label, optimized_publish_bg, optimized_publish_fg = result_bundle["optimized_publish_decision"]
 
-        d1, d2, d3, d4, d5 = st.columns(5)
-        d1.metric("吸引力", result["dimension_scores"]["hook_strength"])
-        d2.metric("真实感", result["dimension_scores"]["authenticity"])
-        d3.metric("信息价值", result["dimension_scores"]["information_density"])
-        d4.metric("互动潜力", result["dimension_scores"]["interaction_potential"])
-        d5.metric("转化潜力", result["dimension_scores"]["conversion_potential"])
+    st.markdown("---")
+    st.subheader("2) 内容诊断结果")
 
-        st.info(f"**一句话判断：** {result['one_sentence_summary']}")
+    decision_col1, decision_col2 = st.columns(2)
+    with decision_col1:
+        st.markdown("**当前发布建议**")
+        render_decision(publish_label, publish_bg, publish_fg)
+    with decision_col2:
+        st.markdown("**优化后预期建议**")
+        render_decision(optimized_publish_label, optimized_publish_bg, optimized_publish_fg)
 
-        left, right = st.columns(2)
+    c1, c2, c3 = st.columns(3)
+    c1.metric("综合评分", f"{original_result['overall_score']}/100")
+    c2.metric("内容品类", category)
+    c3.metric("优化目标", goal)
 
-        with left:
-            st.success("识别到的优点")
-            for item in result["strengths"]:
-                st.write(f"- {item}")
+    d1, d2, d3, d4, d5 = st.columns(5)
+    d1.metric("吸引力", original_result["dimension_scores"]["hook_strength"])
+    d2.metric("真实感", original_result["dimension_scores"]["authenticity"])
+    d3.metric("信息价值", original_result["dimension_scores"]["information_density"])
+    d4.metric("互动潜力", original_result["dimension_scores"]["interaction_potential"])
+    d5.metric("转化潜力", original_result["dimension_scores"]["conversion_potential"])
 
-            st.warning("主要风险")
-            for item in result["risks"]:
-                st.write(f"- {item}")
+    st.info(f"**一句话判断：** {original_result['one_sentence_summary']}")
 
-        with right:
-            st.subheader("优化建议")
-            for i, item in enumerate(result["suggestions"], start=1):
-                st.write(f"{i}. {item}")
+    left, right = st.columns(2)
 
-        st.subheader("优化后建议版本")
+    with left:
+        st.success("识别到的优点")
+        for item in original_result["strengths"]:
+            st.write(f"- {item}")
+
+        st.warning("主要风险")
+        for item in original_result["risks"]:
+            st.write(f"- {item}")
+
+    with right:
+        st.subheader("优化建议")
+        for i, item in enumerate(original_result["suggestions"], start=1):
+            st.write(f"{i}. {item}")
+
+    st.subheader("优化后建议版本")
+
+    title_label_col, title_btn_col = st.columns([8.8, 1.2], vertical_alignment="center")
+    with title_label_col:
         st.markdown("**改写标题**")
-        st.write(result["rewrite_title"])
-        st.markdown("**改写正文**")
-        st.write(result["rewrite_caption"])
+    with title_btn_col:
+        render_copy_button(result_bundle["optimized_title"], "复制标题", "optimized-title")
 
-        with st.expander("查看本次识别到的启发式信号"):
-            st.json(heuristics)
+    st.markdown("<div style='height: 6px;'></div>", unsafe_allow_html=True)
+    render_content_box(result_bundle["optimized_title"], min_height=72)
+
+    st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
+
+    body_label_col, body_btn_col = st.columns([8.8, 1.2], vertical_alignment="center")
+    with body_label_col:
+        st.markdown("**改写正文**")
+    with body_btn_col:
+        render_copy_button(result_bundle["optimized_body"], "复制正文", "optimized-body")
+
+    st.markdown("<div style='height: 6px;'></div>", unsafe_allow_html=True)
+    render_content_box(result_bundle["optimized_body"], min_height=180)
+
+    st.markdown("---")
+    st.subheader("3) 优化前后对比评分")
+
+    cmp1, cmp2, cmp3 = st.columns(3)
+    cmp1.metric(
+        "综合评分变化",
+        f"{optimized_result['overall_score']}/100",
+        delta=f"{score_diff['overall_score']:+d}"
+    )
+    cmp2.metric("优化前发布建议", publish_label)
+    cmp3.metric("优化后发布建议", optimized_publish_label)
+
+    dd1, dd2, dd3, dd4, dd5 = st.columns(5)
+    dd1.metric(
+        "吸引力",
+        optimized_result["dimension_scores"]["hook_strength"],
+        delta=f"{score_diff['hook_strength']:+d}"
+    )
+    dd2.metric(
+        "真实感",
+        optimized_result["dimension_scores"]["authenticity"],
+        delta=f"{score_diff['authenticity']:+d}"
+    )
+    dd3.metric(
+        "信息价值",
+        optimized_result["dimension_scores"]["information_density"],
+        delta=f"{score_diff['information_density']:+d}"
+    )
+    dd4.metric(
+        "互动潜力",
+        optimized_result["dimension_scores"]["interaction_potential"],
+        delta=f"{score_diff['interaction_potential']:+d}"
+    )
+    dd5.metric(
+        "转化潜力",
+        optimized_result["dimension_scores"]["conversion_potential"],
+        delta=f"{score_diff['conversion_potential']:+d}"
+    )
+
+    st.info(f"**优化后一句话判断：** {optimized_result['one_sentence_summary']}")
