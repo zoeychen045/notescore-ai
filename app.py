@@ -22,7 +22,7 @@ st.set_page_config(
 # =========================
 APP_TITLE = "📝 NoteScore AI"
 APP_SUBTITLE = "面向小红书内容场景的 AI 内容发布前诊断与优化 Demo"
-APP_DESC = "帮助创作者与品牌运营在发布前快速评估笔记质量、识别风险并生成优化版本。"
+APP_DESC = "帮助创作者与品牌运营在发布前快速评估笔记质量、识别风险并生成优化方向。"
 APP_NOTE = "说明：本 Demo 基于内容质量信号进行分析，用于辅助内容优化，不代表平台真实推荐机制。"
 
 st.title(APP_TITLE)
@@ -79,10 +79,44 @@ EXAMPLES = {
     },
 }
 
-AD_WORDS = [
+GENERIC_AD_WORDS = [
     "全网最", "闭眼入", "速冲", "必须买", "无脑买", "赶紧冲", "冲就完了",
-    "100%有效", "立刻下单", "最低价", "官方认证", "没有之一"
+    "100%有效", "立刻下单", "最低价", "官方认证", "没有之一",
+    "绝绝子", "封神", "天花板", "必入", "无限回购", "闭眼囤"
 ]
+
+CATEGORY_AD_WORDS = {
+    "美妆": [
+        "黄皮救星", "素颜神器", "妈生感", "本命口红", "烂脸救星",
+        "谁涂谁好看", "随便涂都美", "显白绝了"
+    ],
+    "护肤": [
+        "烂脸救星", "修护天花板", "抗老封神", "敏感肌闭眼入",
+        "屏障救星", "闭眼囤", "谁用谁夸"
+    ],
+    "时尚": [
+        "高级感绝了", "谁穿谁好看", "直接封神", "闭眼搭",
+        "气质拉满", "氛围感拉满"
+    ],
+    "穿搭": [
+        "显瘦绝了", "小个子救星", "梨形身材必入", "谁穿谁瘦",
+        "搭什么都好看", "一套直接出门"
+    ],
+    "食品": [
+        "巨巨巨好吃", "不好吃来骂我", "一口封神", "无限回购",
+        "不允许还有人没吃过", "锁死这口"
+    ],
+    "生活方式": [
+        "租房党救星", "提升幸福感", "后悔没早点买", "谁懂啊",
+        "用了就回不去", "生活质量直接提升"
+    ],
+    "旅行": [
+        "一生必去", "随手拍都出片", "朋友圈问爆", "人生照片",
+        "去一次就爱上", "不去会后悔"
+    ],
+    "其他": []
+}
+
 SCENE_WORDS = [
     "通勤", "熬夜", "黄黑皮", "油皮", "干皮", "敏感肌", "学生党", "打工人",
     "约会", "旅行", "换季", "早八", "军训", "租房党"
@@ -93,7 +127,8 @@ AUTH_WORDS = [
 ]
 INFO_WORDS = [
     "成分", "质地", "妆效", "持妆", "步骤", "教程", "对比", "优缺点",
-    "价格", "色号", "肤质", "建议", "避雷", "清单", "使用感", "适合"
+    "价格", "色号", "肤质", "建议", "避雷", "清单", "使用感", "适合",
+    "地点", "店名", "行程", "路线", "体验", "推荐", "踩雷", "攻略"
 ]
 ENGAGE_WORDS = [
     "你们", "姐妹", "有人", "有没有", "吗？", "吗?", "求推荐", "哪个更",
@@ -208,7 +243,7 @@ def render_content_box(text: str, min_height: int = 0):
         unsafe_allow_html=True,
     )
 
-def heuristic_signals(title: str, body: str) -> Dict:
+def heuristic_signals(title: str, body: str, category: str) -> Dict:
     text = f"{title}\n{body}"
     strengths = []
     risks = []
@@ -248,14 +283,19 @@ def heuristic_signals(title: str, body: str) -> Dict:
         adjustments["authenticity"] -= 5
         risks.append("个人体验痕迹偏弱，像泛化文案")
 
-    ad_hits = sum(word in text for word in AD_WORDS)
-    if ad_hits >= 2:
-        adjustments["authenticity"] -= 12
-        adjustments["conversion_potential"] -= 3
+    ad_words = GENERIC_AD_WORDS + CATEGORY_AD_WORDS.get(category, [])
+    ad_hits = sum(word in text for word in ad_words)
+    if ad_hits >= 3:
+        adjustments["authenticity"] -= 14
+        adjustments["conversion_potential"] -= 4
         risks.append("营销腔较重，容易削弱平台原生感")
+    elif ad_hits == 2:
+        adjustments["authenticity"] -= 9
+        adjustments["conversion_potential"] -= 2
+        risks.append("促销化表达偏多，可能影响原生感")
     elif ad_hits == 1:
-        adjustments["authenticity"] -= 6
-        risks.append("存在明显促销化表达")
+        adjustments["authenticity"] -= 5
+        risks.append("存在一定营销化表达")
 
     info_hits = sum(word in text for word in INFO_WORDS)
     if info_hits >= 3:
@@ -311,6 +351,11 @@ def call_deepseek_analysis(
     rewrite_instruction = """
 - 需要输出 rewrite_title 和 rewrite_caption
 - 改写标题和改写正文必须是可直接展示给用户的最终版本
+- 改写版本用于提供另一种优化方向，不要默认把改写理解成一定更优
+- 必须尽量保留原文中的关键细节，包括具体地点、人物、时间、行程、产品信息、对比判断、真实体验和核心结论
+- 不要为了流畅度过度压缩信息量
+- 如果原文已经有较强的信息价值与真实感，优先做定向润色，而不是大幅重写
+- 旅行、攻略、测评类内容优先保留真实叙述感，不要为了增强标题吸引力而过度文案化
 - 不要出现“可补充”“可填写”“可提及”“可替换”“可写成”等占位符或备注语气
 - 不要用括号给作者留提醒，不要输出半成品草稿
 """ if include_rewrite else """
@@ -382,8 +427,8 @@ def call_deepseek_analysis(
             {"role": "user", "content": user_prompt},
         ],
         response_format={"type": "json_object"},
-        temperature=0.6,
-        max_tokens=1200,
+        temperature=0.4,
+        max_tokens=1400,
     )
 
     raw = (response.choices[0].message.content or "").strip()
@@ -494,12 +539,28 @@ def render_decision(label: str, bg: str, fg: str):
     )
 
 def compare_scores(before: Dict, after: Dict) -> Dict:
-    keys = list(WEIGHTS.keys())
     diff = {}
-    for key in keys:
+    for key in WEIGHTS.keys():
         diff[key] = after["dimension_scores"][key] - before["dimension_scores"][key]
     diff["overall_score"] = after["overall_score"] - before["overall_score"]
     return diff
+
+def get_rewrite_feedback(score_diff: int) -> Tuple[str, str]:
+    if score_diff >= 3:
+        return (
+            "success",
+            "本次改写提升了整体评分，可作为更偏平台表达的一种优化方向参考。"
+        )
+    elif -2 <= score_diff <= 2:
+        return (
+            "info",
+            "本次改写提供了另一种表达方式，整体评分基本持平，可结合原稿细节进行取舍。"
+        )
+    else:
+        return (
+            "warning",
+            "本次改写更偏表达调整，未明显提升整体质量。建议保留原稿中的关键信息细节，再做定向优化。"
+        )
 
 # =========================
 # Sidebar
@@ -517,8 +578,8 @@ with st.sidebar:
     st.markdown("- 五维评分")
     st.markdown("- 风险诊断")
     st.markdown("- 优化建议")
-    st.markdown("- 改写版本")
-    st.markdown("- 优化前后对比")
+    st.markdown("- 改写方向参考")
+    st.markdown("- 原稿与改写版对比")
 
     st.markdown("---")
     if DEEPSEEK_API_KEY:
@@ -596,11 +657,11 @@ if run:
     elif not DEEPSEEK_API_KEY:
         st.error("没有检测到 API Key。请先配置 DEEPSEEK_API_KEY。")
     else:
-        with st.spinner("正在生成内容诊断与优化版本..."):
+        with st.spinner("正在生成内容诊断与改写方向..."):
             try:
                 client = get_client()
 
-                original_heuristics = heuristic_signals(title, body)
+                original_heuristics = heuristic_signals(title, body, category)
                 original_llm = call_deepseek_analysis(
                     client=client,
                     title=title,
@@ -615,21 +676,23 @@ if run:
                 rewrite_title = original_result["rewrite_title"]
                 rewrite_caption = original_result["rewrite_caption"]
 
-                optimized_heuristics = heuristic_signals(rewrite_title, rewrite_caption)
-                optimized_llm = call_deepseek_analysis(
+                rewritten_heuristics = heuristic_signals(rewrite_title, rewrite_caption, category)
+                rewritten_llm = call_deepseek_analysis(
                     client=client,
                     title=rewrite_title,
                     body=rewrite_caption,
                     category=category,
                     goal=goal,
-                    heuristics=optimized_heuristics,
+                    heuristics=rewritten_heuristics,
                     include_rewrite=False,
                 )
-                optimized_result = blend_result(optimized_llm, optimized_heuristics)
+                rewritten_result = blend_result(rewritten_llm, rewritten_heuristics)
 
-                score_diff = compare_scores(original_result, optimized_result)
+                score_diff = compare_scores(original_result, rewritten_result)
                 publish_label, publish_bg, publish_fg = get_publish_decision(original_result)
-                optimized_publish_label, optimized_publish_bg, optimized_publish_fg = get_publish_decision(optimized_result)
+                rewritten_publish_label, rewritten_publish_bg, rewritten_publish_fg = get_publish_decision(rewritten_result)
+
+                rewrite_status, rewrite_feedback = get_rewrite_feedback(score_diff["overall_score"])
 
                 st.session_state.analysis_result = {
                     "category": category,
@@ -637,12 +700,14 @@ if run:
                     "original_title": title,
                     "original_body": body,
                     "original_result": original_result,
-                    "optimized_title": rewrite_title,
-                    "optimized_body": rewrite_caption,
-                    "optimized_result": optimized_result,
+                    "rewritten_title": rewrite_title,
+                    "rewritten_body": rewrite_caption,
+                    "rewritten_result": rewritten_result,
                     "score_diff": score_diff,
                     "publish_decision": (publish_label, publish_bg, publish_fg),
-                    "optimized_publish_decision": (optimized_publish_label, optimized_publish_bg, optimized_publish_fg),
+                    "rewritten_publish_decision": (rewritten_publish_label, rewritten_publish_bg, rewritten_publish_fg),
+                    "rewrite_status": rewrite_status,
+                    "rewrite_feedback": rewrite_feedback,
                 }
 
             except Exception as e:
@@ -658,10 +723,12 @@ if result_bundle:
     category = result_bundle["category"]
     goal = result_bundle["goal"]
     original_result = result_bundle["original_result"]
-    optimized_result = result_bundle["optimized_result"]
+    rewritten_result = result_bundle["rewritten_result"]
     score_diff = result_bundle["score_diff"]
     publish_label, publish_bg, publish_fg = result_bundle["publish_decision"]
-    optimized_publish_label, optimized_publish_bg, optimized_publish_fg = result_bundle["optimized_publish_decision"]
+    rewritten_publish_label, rewritten_publish_bg, rewritten_publish_fg = result_bundle["rewritten_publish_decision"]
+    rewrite_status = result_bundle["rewrite_status"]
+    rewrite_feedback = result_bundle["rewrite_feedback"]
 
     st.markdown("---")
     st.subheader("2) 内容诊断结果")
@@ -671,8 +738,8 @@ if result_bundle:
         st.markdown("**当前发布建议**")
         render_decision(publish_label, publish_bg, publish_fg)
     with decision_col2:
-        st.markdown("**优化后预期建议**")
-        render_decision(optimized_publish_label, optimized_publish_bg, optimized_publish_fg)
+        st.markdown("**改写后评估建议**")
+        render_decision(rewritten_publish_label, rewritten_publish_bg, rewritten_publish_fg)
 
     c1, c2, c3 = st.columns(3)
     c1.metric("综合评分", f"{original_result['overall_score']}/100")
@@ -704,16 +771,23 @@ if result_bundle:
         for i, item in enumerate(original_result["suggestions"], start=1):
             st.write(f"{i}. {item}")
 
-    st.subheader("优化后建议版本")
+    st.subheader("3) 改写方向参考")
+
+    if rewrite_status == "success":
+        st.success(rewrite_feedback)
+    elif rewrite_status == "warning":
+        st.warning(rewrite_feedback)
+    else:
+        st.info(rewrite_feedback)
 
     title_label_col, title_btn_col = st.columns([8.8, 1.2], vertical_alignment="center")
     with title_label_col:
         st.markdown("**改写标题**")
     with title_btn_col:
-        render_copy_button(result_bundle["optimized_title"], "复制标题", "optimized-title")
+        render_copy_button(result_bundle["rewritten_title"], "复制标题", "rewritten-title")
 
     st.markdown("<div style='height: 6px;'></div>", unsafe_allow_html=True)
-    render_content_box(result_bundle["optimized_title"], min_height=72)
+    render_content_box(result_bundle["rewritten_title"], min_height=72)
 
     st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
 
@@ -721,48 +795,48 @@ if result_bundle:
     with body_label_col:
         st.markdown("**改写正文**")
     with body_btn_col:
-        render_copy_button(result_bundle["optimized_body"], "复制正文", "optimized-body")
+        render_copy_button(result_bundle["rewritten_body"], "复制正文", "rewritten-body")
 
     st.markdown("<div style='height: 6px;'></div>", unsafe_allow_html=True)
-    render_content_box(result_bundle["optimized_body"], min_height=180)
+    render_content_box(result_bundle["rewritten_body"], min_height=180)
 
     st.markdown("---")
-    st.subheader("3) 优化前后对比评分")
+    st.subheader("4) 原稿与改写版对比评分")
 
     cmp1, cmp2, cmp3 = st.columns(3)
     cmp1.metric(
-        "综合评分变化",
-        f"{optimized_result['overall_score']}/100",
+        "改写版评分",
+        f"{rewritten_result['overall_score']}/100",
         delta=f"{score_diff['overall_score']:+d}"
     )
-    cmp2.metric("优化前发布建议", publish_label)
-    cmp3.metric("优化后发布建议", optimized_publish_label)
+    cmp2.metric("原稿发布建议", publish_label)
+    cmp3.metric("改写后评估建议", rewritten_publish_label)
 
     dd1, dd2, dd3, dd4, dd5 = st.columns(5)
     dd1.metric(
         "吸引力",
-        optimized_result["dimension_scores"]["hook_strength"],
+        rewritten_result["dimension_scores"]["hook_strength"],
         delta=f"{score_diff['hook_strength']:+d}"
     )
     dd2.metric(
         "真实感",
-        optimized_result["dimension_scores"]["authenticity"],
+        rewritten_result["dimension_scores"]["authenticity"],
         delta=f"{score_diff['authenticity']:+d}"
     )
     dd3.metric(
         "信息价值",
-        optimized_result["dimension_scores"]["information_density"],
+        rewritten_result["dimension_scores"]["information_density"],
         delta=f"{score_diff['information_density']:+d}"
     )
     dd4.metric(
         "互动潜力",
-        optimized_result["dimension_scores"]["interaction_potential"],
+        rewritten_result["dimension_scores"]["interaction_potential"],
         delta=f"{score_diff['interaction_potential']:+d}"
     )
     dd5.metric(
         "转化潜力",
-        optimized_result["dimension_scores"]["conversion_potential"],
+        rewritten_result["dimension_scores"]["conversion_potential"],
         delta=f"{score_diff['conversion_potential']:+d}"
     )
 
-    st.info(f"**优化后一句话判断：** {optimized_result['one_sentence_summary']}")
+    st.info(f"**改写后一句话判断：** {rewritten_result['one_sentence_summary']}")
