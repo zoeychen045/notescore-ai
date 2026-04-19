@@ -22,9 +22,9 @@ st.set_page_config(
 # App Copy
 # =========================
 APP_TITLE = "📝 NoteScore AI"
-APP_SUBTITLE = "面向小红书内容场景的 AI 内容发布前诊断与优化 Demo"
+APP_SUBTITLE = "面向小红书内容场景的 AI 内容发布前诊断与优化"
 APP_DESC = "帮助创作者与品牌运营在发布前快速评估笔记质量、识别风险并生成优化方向。"
-APP_NOTE = "说明：本 Demo 基于内容质量信号进行分析，用于辅助内容优化，不代表平台真实推荐机制。"
+APP_NOTE = "说明：本产品基于内容质量信号进行分析，用于辅助内容优化，不代表平台真实推荐机制。"
 
 st.title(APP_TITLE)
 st.caption(APP_SUBTITLE)
@@ -673,67 +673,67 @@ if run:
         cache_key = make_cache_key(title, body, category, goal)
 
         if cache_key in st.session_state.analysis_cache:
-    st.session_state.analysis_result = st.session_state.analysis_cache[cache_key]
-else:
-    with st.spinner("正在生成内容诊断与改写方向..."):
-        try:
-            client = get_client()
+            st.session_state.analysis_result = st.session_state.analysis_cache[cache_key]
+        else:
+            with st.spinner("正在生成内容诊断与改写方向..."):
+                try:
+                    client = get_client()
 
-            original_heuristics = heuristic_signals(title, body, category)
-            original_llm = call_deepseek_analysis(
-                client=client,
-                title=title,
-                body=body,
-                category=category,
-                goal=goal,
-                heuristics=original_heuristics,
-                include_rewrite=True,
-            )
-            original_result = blend_result(original_llm, original_heuristics)
+                    original_heuristics = heuristic_signals(title, body, category)
+                    original_llm = call_deepseek_analysis(
+                        client=client,
+                        title=title,
+                        body=body,
+                        category=category,
+                        goal=goal,
+                        heuristics=original_heuristics,
+                        include_rewrite=True,
+                    )
+                    original_result = blend_result(original_llm, original_heuristics)
 
-            rewrite_title = original_result["rewrite_title"]
-            rewrite_caption = original_result["rewrite_caption"]
+                    rewrite_title = original_result["rewrite_title"]
+                    rewrite_caption = original_result["rewrite_caption"]
 
-            rewritten_heuristics = heuristic_signals(rewrite_title, rewrite_caption, category)
-            rewritten_llm = call_deepseek_analysis(
-                client=client,
-                title=rewrite_title,
-                body=rewrite_caption,
-                category=category,
-                goal=goal,
-                heuristics=rewritten_heuristics,
-                include_rewrite=False,
-            )
-            rewritten_result = blend_result(rewritten_llm, rewritten_heuristics)
+                    rewritten_heuristics = heuristic_signals(rewrite_title, rewrite_caption, category)
+                    rewritten_llm = call_deepseek_analysis(
+                        client=client,
+                        title=rewrite_title,
+                        body=rewrite_caption,
+                        category=category,
+                        goal=goal,
+                        heuristics=rewritten_heuristics,
+                        include_rewrite=False,
+                    )
+                    rewritten_result = blend_result(rewritten_llm, rewritten_heuristics)
 
-            score_diff = compare_scores(original_result, rewritten_result)
-            publish_label, publish_bg, publish_fg = get_publish_decision(original_result)
-            rewritten_publish_label, rewritten_publish_bg, rewritten_publish_fg = get_publish_decision(rewritten_result)
+                    score_diff = compare_scores(original_result, rewritten_result)
+                    publish_label, publish_bg, publish_fg = get_publish_decision(original_result)
+                    rewritten_publish_label, rewritten_publish_bg, rewritten_publish_fg = get_publish_decision(rewritten_result)
 
-            rewrite_status, rewrite_feedback = get_rewrite_feedback(score_diff["overall_score"])
+                    rewrite_status, rewrite_feedback = get_rewrite_feedback(score_diff["overall_score"])
 
-            result_bundle = {
-                "category": category,
-                "goal": goal,
-                "original_title": title,
-                "original_body": body,
-                "original_result": original_result,
-                "rewritten_title": rewrite_title,
-                "rewritten_body": rewrite_caption,
-                "rewritten_result": rewritten_result,
-                "score_diff": score_diff,
-                "publish_decision": (publish_label, publish_bg, publish_fg),
-                "rewritten_publish_decision": (rewritten_publish_label, rewritten_publish_bg, rewritten_publish_fg),
-                "rewrite_status": rewrite_status,
-                "rewrite_feedback": rewrite_feedback,
-            }
+                    result_bundle = {
+                        "category": category,
+                        "goal": goal,
+                        "original_title": title,
+                        "original_body": body,
+                        "original_result": original_result,
+                        "rewritten_title": rewrite_title,
+                        "rewritten_body": rewrite_caption,
+                        "rewritten_result": rewritten_result,
+                        "score_diff": score_diff,
+                        "publish_decision": (publish_label, publish_bg, publish_fg),
+                        "rewritten_publish_decision": (rewritten_publish_label, rewritten_publish_bg, rewritten_publish_fg),
+                        "rewrite_status": rewrite_status,
+                        "rewrite_feedback": rewrite_feedback,
+                    }
 
-            st.session_state.analysis_result = result_bundle
-            st.session_state.analysis_cache[cache_key] = result_bundle
+                    st.session_state.analysis_result = result_bundle
+                    st.session_state.analysis_cache[cache_key] = result_bundle
 
-        except Exception as e:
-            st.error(f"分析失败：{e}")
-            st.stop() 
+                except Exception as e:
+                    st.error(f"分析失败：{e}")
+                    st.stop()
 
 # =========================
 # Render Result
@@ -801,7 +801,7 @@ if result_bundle:
     else:
         st.info(rewrite_feedback)
 
-    title_label_col, title_btn_col = st.columns([8.8, 1.2])
+    title_label_col, title_btn_col = st.columns([8.8, 1.2], vertical_alignment="center")
     with title_label_col:
         st.markdown("**改写标题**")
     with title_btn_col:
@@ -812,7 +812,7 @@ if result_bundle:
 
     st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
 
-    body_label_col, body_btn_col = st.columns([8.8, 1.2])
+    body_label_col, body_btn_col = st.columns([8.8, 1.2], vertical_alignment="center")
     with body_label_col:
         st.markdown("**改写正文**")
     with body_btn_col:
