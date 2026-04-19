@@ -192,6 +192,26 @@ st.markdown(
     div[data-testid="stMetric"] label {
         color: #475467;
     }
+    .stButton > button {
+        border-radius: 8px;
+        font-weight: 800;
+        border: 1px solid #D0D5DD;
+        min-height: 42px;
+    }
+    .stButton > button[kind="primary"] {
+        background: #F2557A;
+        border-color: #F2557A;
+    }
+    button[data-baseweb="tab"] {
+        font-weight: 700;
+        padding-top: 10px;
+        padding-bottom: 10px;
+    }
+    div[data-baseweb="select"] > div,
+    div[data-testid="stTextInput"] input,
+    div[data-testid="stTextArea"] textarea {
+        border-radius: 8px;
+    }
     .np-hero {
         background: linear-gradient(135deg, #111827 0%, #2A2F3A 52%, #F2557A 100%);
         color: #FFFFFF;
@@ -329,6 +349,19 @@ st.markdown(
     .np-decision .np-decision-body {
         font-size: 15px;
         font-weight: 650;
+    }
+    .np-proof-list {
+        background: #F9FAFB;
+        border: 1px solid #EAECF0;
+        border-radius: 8px;
+        padding: 14px 16px;
+        margin-bottom: 12px;
+    }
+    .np-proof-item {
+        color: #475467;
+        font-size: 14px;
+        line-height: 1.7;
+        margin: 4px 0;
     }
     </style>
     """,
@@ -563,6 +596,35 @@ def describe_content_signals(signals: Dict[str, int]) -> str:
         descriptions.append("表达较自然")
 
     return "｜".join(descriptions[:5])
+
+
+def scoring_basis_items(signals: Dict[str, int], goal: str) -> List[str]:
+    items = [
+        f"真实体验信号：识别到 {signals.get('auth_hits', 0)} 类第一人称体验、取舍或使用感表达。",
+        f"信息密度信号：识别到 {signals.get('info_hits', 0)} 类细节、对比、适用边界或决策依据。",
+        f"场景相关性：识别到 {signals.get('scene_hits', 0)} 类人群、场景或使用条件。",
+        f"互动设计：识别到 {signals.get('engage_hits', 0)} 类提问、讨论或评论触发。",
+        f"营销风险：识别到 {signals.get('ad_hits', 0)} 类夸张或绝对化表达。",
+    ]
+    weights = WEIGHTS_BY_GOAL.get(goal, WEIGHTS_BY_GOAL["提升收藏率"])
+    top_dimension = max(weights, key=weights.get)
+    items.append(f"目标权重：当前目标是「{goal}」，因此更重视「{DIMENSIONS[top_dimension]}」。")
+    return items
+
+
+def render_scoring_basis(signals: Dict[str, int], goal: str):
+    rows = "\n".join(
+        f'<div class="np-proof-item">- {html.escape(item)}</div>'
+        for item in scoring_basis_items(signals, goal)
+    )
+    st.markdown(
+        f"""
+        <div class="np-proof-list">
+            {rows}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def build_rewrite_comparison(
@@ -1052,6 +1114,9 @@ def init_session_state():
         "analysis_result": None,
         "manual_title": "",
         "manual_body": "",
+        "feedback_log": [],
+        "feedback_choice": "会采纳主要建议",
+        "feedback_note": "",
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -1187,27 +1252,31 @@ with tab_main:
             signals = result.get("heuristic_signals", {})
             st.caption(f"内容特征：{describe_content_signals(signals)}")
 
-        st.subheader("3) 关键问题与行动建议")
-        a, b, c = st.columns(3)
-        with a:
-            st.markdown("**已识别优势**")
-            for item in result["strengths"][:3]:
-                st.write(f"- {item}")
-        with b:
-            st.markdown("**核心风险**")
-            for item in result["risks"][:3]:
-                st.write(f"- {item}")
-        with c:
-            st.markdown("**下一步动作**")
-            for idx, item in enumerate(result["action_suggestions"][:3], start=1):
-                st.write(f"{idx}. {item}")
-
-        with st.expander("优先改这 3 件事", expanded=True):
+        st.subheader("3) 诊断依据与下一步")
+        judge_tab, action_tab, basis_tab = st.tabs(["核心判断", "优先动作", "评分依据"])
+        with judge_tab:
+            a, b, c = st.columns(3)
+            with a:
+                st.markdown("**已识别优势**")
+                for item in result["strengths"][:3]:
+                    st.write(f"- {item}")
+            with b:
+                st.markdown("**核心风险**")
+                for item in result["risks"][:3]:
+                    st.write(f"- {item}")
+            with c:
+                st.markdown("**下一步动作**")
+                for idx, item in enumerate(result["action_suggestions"][:3], start=1):
+                    st.write(f"{idx}. {item}")
+        with action_tab:
             for item in result.get("risk_priority", [])[:3]:
                 render_card(
                     f"问题：{item.get('risk', '风险项')}",
                     f"为什么重要：影响 {item.get('impact', '中')}，修改成本 {item.get('effort', '低')}\n先改哪里：{item.get('first_action', '先做局部优化。')}",
                 )
+        with basis_tab:
+            st.caption("评分来自内容质量信号和当前优化目标，不代表真实平台分发结果。")
+            render_scoring_basis(result.get("heuristic_signals", {}), st.session_state.goal_input)
 
         st.subheader("4) AI 改写稿")
         st.caption(result.get("rewrite_rationale", "保留原文事实，强化结构与表达。"))
@@ -1260,8 +1329,31 @@ with tab_main:
         )
         st.caption("用于比较表达方向，不代表真实发布表现。")
 
-        st.subheader("6) 后续验证想法")
-        st.success(result.get("experiment_idea", "后续可对比不同标题钩子对点击和收藏的影响。"))
+        with st.expander("6) 记录这次诊断反馈（可选）", expanded=False):
+            st.caption("用于模拟真实产品里的反馈闭环：用户是否采纳建议，会反向帮助校准评分和建议质量。")
+            feedback_choice = st.radio(
+                "这次诊断对你是否有帮助？",
+                ["会采纳主要建议", "只采纳部分建议", "暂时不会采纳"],
+                horizontal=True,
+                key="feedback_choice",
+            )
+            feedback_note = st.text_area(
+                "补充说明（可选）",
+                key="feedback_note",
+                height=90,
+                placeholder="例如：会保留原标题，但采纳正文结构建议。",
+            )
+            if st.button("记录反馈"):
+                st.session_state.feedback_log.append({
+                    "choice": feedback_choice,
+                    "note": feedback_note.strip(),
+                    "score": result["overall_score"],
+                    "status": result["overall_status"],
+                    "goal": st.session_state.goal_input,
+                    "category": st.session_state.category_input,
+                })
+                st.success("已记录。本次反馈会作为后续校准建议质量的样本。")
+            st.info(result.get("experiment_idea", "后续可对比不同标题钩子对点击和收藏的影响。"))
 
 
 # =========================
@@ -1340,8 +1432,29 @@ with tab_product:
         )
         render_card(
             "验证计划",
-            "先观察建议采纳率和改写后可发布率，再接入发布后的点击、收藏和评论质量，持续校准不同品类、不同目标下的评分权重。",
+            "先记录用户是否采纳诊断建议，再观察改写后可发布率；后续接入点击、收藏和评论质量，持续校准评分权重。",
             min_height=132,
+        )
+
+    st.markdown("**产品价值**")
+    value1, value2, value3 = st.columns(3)
+    with value1:
+        render_card(
+            "用户价值",
+            "降低发布前判断成本，帮助创作者快速知道这篇笔记能不能发、最值得先改哪里。",
+            min_height=116,
+        )
+    with value2:
+        render_card(
+            "商业价值",
+            "帮助品牌内容运营减少硬广感和返工，提高种草内容进入可发布状态的效率。",
+            min_height=116,
+        )
+    with value3:
+        render_card(
+            "生态价值",
+            "鼓励更真实、具体、有边界的内容表达，让商业内容更原生，也提升社区内容质量。",
+            min_height=116,
         )
 
     st.markdown("**产品机制**")
@@ -1372,11 +1485,17 @@ with tab_product:
     st.markdown("**衡量指标**")
     metric1, metric2, metric3 = st.columns(3)
     with metric1:
-        render_label_card("核心指标", "建议采纳率", "用户是否愿意按诊断结果修改内容", min_height=126)
+        render_label_card("用户指标", "建议采纳率", "用户是否愿意按诊断结果修改内容", min_height=126)
     with metric2:
-        render_label_card("质量指标", "有效发布率", "优化后内容是否更接近可发布状态", min_height=126)
+        render_label_card("效率指标", "返工减少率", "品牌或创作者修改内容的轮次是否下降", min_height=126)
     with metric3:
-        render_label_card("长期指标", "反馈闭环", "发布后互动质量回流评分体系", min_height=126)
+        render_label_card("生态指标", "高质反馈率", "发布后收藏、评论质量回流评分体系", min_height=126)
+
+    feedback_count = len(st.session_state.get("feedback_log", []))
+    render_card(
+        "当前反馈样本",
+        f"本次会话已记录 {feedback_count} 条诊断反馈。上线后可将采纳情况、发布表现和内容品类一起回流，用于持续校准评分和建议优先级。",
+    )
 
     st.markdown("**能力边界**")
     boundary1, boundary2, boundary3 = st.columns(3)
